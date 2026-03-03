@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Environment & secrets
+backend/.env
+*.env
+
+# Database (ข้อมูล local ไม่ต้อง push)
+backend/law.db
+backend/*.db
+
+# Frontend build & deps
+frontend/node_modules/
+frontend/dist/
+
+# Temp scripts
+backend/check_db.py
+backend/fix_cyber.py
+backend/update_urls.py
+
+# OS
+.DS_Store
+Thumbs.db

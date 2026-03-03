@@ -146,7 +146,7 @@ export default function App() {
         </Routes>
       </main>
 
-      <ChatBot />
+      <ChatBot auth={auth} />
 
       {showChangePw && <ChangePasswordModal auth={auth} onClose={() => setShowChangePw(false)} />}
     </div>

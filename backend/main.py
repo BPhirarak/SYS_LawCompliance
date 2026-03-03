@@ -180,8 +180,7 @@ def get_dashboard(department_id: int = None):
     return {"summary": summary, "byDept": by_dept, "byCategory": by_category, "recentUpdates": recent_updates, "lawStats": law_stats}
 
 # ── CHAT AGENT ────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+from llm_provider import call_llm, get_provider
 
 def get_laws_context():
     conn = get_conn()
@@ -271,6 +270,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    username: Optional[str] = "anonymous"
     history: Optional[List[ChatMessage]] = []
 
 class ChatResponse(BaseModel):
@@ -278,9 +278,45 @@ class ChatResponse(BaseModel):
     session_id: str
     law_updates: Optional[list] = []
 
+@app.get("/api/chat/provider")
+def get_chat_provider():
+    """แสดง provider และ model ที่ใช้งานอยู่"""
+    p = get_provider()
+    model_map = {
+        "anthropic":  os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5"),
+        "openai":     os.environ.get("OPENAI_MODEL", "gpt-4o"),
+        "bedrock":    os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
+        "grok":       os.environ.get("GROK_MODEL", "grok-3-mini"),
+        "ollama":     os.environ.get("OLLAMA_MODEL", "llama3.2"),
+        "openrouter": os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+        "demo":       "demo",
+    }
+    return {"provider": p, "model": model_map.get(p, "unknown")}
+
+class ProviderSwitch(BaseModel):
+    provider: str
+    model: Optional[str] = None
+
+@app.post("/api/chat/provider")
+def set_chat_provider(body: ProviderSwitch):
+    """เปลี่ยน provider และ model แบบ runtime (ไม่ต้อง restart)"""
+    valid = ["anthropic", "openai", "bedrock", "grok", "ollama", "openrouter"]
+    if body.provider not in valid:
+        raise HTTPException(400, f"provider ต้องเป็นหนึ่งใน: {valid}")
+    os.environ["LLM_PROVIDER"] = body.provider
+    model_env = {
+        "anthropic": "ANTHROPIC_MODEL", "openai": "OPENAI_MODEL",
+        "bedrock": "BEDROCK_MODEL_ID", "grok": "GROK_MODEL",
+        "ollama": "OLLAMA_MODEL", "openrouter": "OPENROUTER_MODEL",
+    }
+    if body.model and body.provider in model_env:
+        os.environ[model_env[body.provider]] = body.model
+    return {"provider": body.provider, "model": body.model or os.environ.get(model_env.get(body.provider,""), "")}
+
 @app.post("/api/chat")
 async def chat(body: ChatRequest):
     session_id = body.session_id or str(uuid.uuid4())[:8]
+    username = body.username or "anonymous"
     conn = get_conn()
     laws_ctx = get_laws_context()
     system = SYSTEM_PROMPT.format(laws_context=laws_ctx)
@@ -291,118 +327,20 @@ async def chat(body: ChatRequest):
     reply = ""
     law_updates = []
 
-    # Try Anthropic first, then OpenAI, then fallback
-    anthropic_ok = False
-    if ANTHROPIC_API_KEY:
-        try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            response = client.messages.create(
-                model="claude-opus-4-5",
-                max_tokens=8096,
-                system=system,
-                messages=messages
-            )
-            reply = response.content[0].text
-            anthropic_ok = True
-        except Exception as e:
-            err = str(e)
-            # Fall through to OpenAI if credit/auth issue
-            if any(x in err for x in ["credit", "balance", "401", "authentication"]):
-                anthropic_ok = False
+    try:
+        reply = call_llm(system, messages)
+    except ValueError as e:
+        if str(e) == "demo":
+            # Demo mode fallback
+            msg = body.message.lower()
+            if any(k in msg for k in ["อัปเดต","update","ค้นหา","search","ใหม่","เปลี่ยน"]):
+                reply = "🔍 **Demo mode** — กรุณาตั้งค่า `LLM_PROVIDER` และ API key ใน `.env` เพื่อใช้งาน AI จริง\n\nรองรับ: `anthropic` | `openai` | `bedrock` | `grok` | `ollama` | `openrouter`"
             else:
-                reply = f"⚠️ Anthropic API error: {err}"
-                anthropic_ok = True  # real error, don't fallback
-
-    if not anthropic_ok and OPENAI_API_KEY:
-        try:
-            import openai
-            client = openai.OpenAI(api_key=OPENAI_API_KEY)
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "system", "content": system}] + messages,
-                max_tokens=8096
-            )
-            reply = response.choices[0].message.content
-        except Exception as e:
-            reply = f"⚠️ OpenAI API error: {str(e)}"
-    elif not anthropic_ok and not OPENAI_API_KEY:
-        # Demo mode - smart keyword-based responses
-        msg = body.message.lower()
-        if any(k in msg for k in ["อัปเดต","update","ค้นหา","search","ใหม่","เปลี่ยน"]):
-            reply = """🔍 **กำลังค้นหาการเปลี่ยนแปลงกฏหมาย...**
-
-จากการตรวจสอบแหล่งข้อมูลล่าสุด (ราชกิจจานุเบกษา, กรมโรงงานอุตสาหกรรม):
-
-**พบการเปลี่ยนแปลงที่น่าสนใจ:**
-
-1. **LABOR-001** - พ.ร.บ. คุ้มครองแรงงาน ฉบับที่ 9 พ.ศ. 2568
-   - 🔴 เก่า: ลาคลอด 98 วัน
-   - 🟢 ใหม่: ลาคลอด 120 วัน (มีผล 7 ธ.ค. 2568)
-   - มีการหารือเพิ่มเติมเรื่องลาบิดา อาจขยายเป็น 30 วัน
-
-2. **SAFETY-001** - กฎกระทรวงความปลอดภัย
-   - มีการปรับปรุงมาตรฐาน PPE สำหรับงานเชื่อมโลหะ
-
-⚠️ **หมายเหตุ:** กรุณาตั้งค่า ANTHROPIC_API_KEY หรือ OPENAI_API_KEY เพื่อค้นหาข้อมูลจริงจาก web"""
-        elif any(k in msg for k in ["factory","โรงงาน","ใบอนุญาต"]):
-            reply = """**พ.ร.บ. โรงงาน พ.ศ. 2535 (แก้ไข พ.ศ. 2562)**
-
-โรงงานเหล็กของ SYS Steel จัดเป็น **โรงงานประเภท 3** เนื่องจาก:
-- ใช้เครื่องจักรเกิน 75 แรงม้า
-- มีพนักงานเกิน 75 คน
-
-**ข้อกำหนดสำคัญ:**
-- ต้องขอใบอนุญาตจาก กรมโรงงานอุตสาหกรรม (กรอ.)
-- ใช้เวลา 40-90 วัน
-- ต้องมี EIA, แผนความปลอดภัย, แผนผังอาคาร
-
-**บทลงโทษ:** จำคุกสูงสุด 4 ปี และ/หรือปรับสูงสุด 400,000 บาท
-
-**หน่วยงานรับผิดชอบ:** OE (Operational Excellence), IA (Internal Audit)"""
-        elif any(k in msg for k in ["safety","ความปลอดภัย","ppe","อุบัติเหตุ"]):
-            reply = """**กฏหมายความปลอดภัยและอาชีวอนามัย**
-
-**พ.ร.บ. ความปลอดภัยฯ พ.ศ. 2554:**
-- บังคับมีเจ้าหน้าที่ความปลอดภัย (จป.) ทุกระดับ
-- จป. วิชาชีพ: ปริญญาตรี + ประสบการณ์ > 5 ปี
-- ต้องรายงานอุบัติเหตุร้ายแรงภายใน 7 วัน
-
-**PPE ที่บังคับสำหรับโรงงานเหล็ก:**
-- หน้ากากกันความร้อน + แว่นตาป้องกัน
-- อุปกรณ์ลดเสียง (พื้นที่ > 85 dB)
-- เครื่องช่วยหายใจ (พื้นที่ฝุ่น/ก๊าซ)
-- รองเท้านิรภัย + ถุงมือกันความร้อน
-
-**หน่วยงานรับผิดชอบ:** Safety Department (primary)"""
-        elif any(k in msg for k in ["สิ่งแวดล้อม","env","cems","มลพิษ"]):
-            reply = """**กฏหมายสิ่งแวดล้อม**
-
-**CEMS (ระบบตรวจวัดมลพิษต่อเนื่อง):**
-- บังคับสำหรับโรงงานเหล็กขนาดใหญ่
-- ต้องเชื่อมต่อ real-time กับ กรมควบคุมมลพิษ 24/7
-- ค่ามาตรฐาน: ฝุ่นละออง ≤ 60 มก./ลบ.ม.
-
-**บทลงโทษ:**
-- ละเมิดมาตรฐาน: ปรับสูงสุด 1,500,000 บาท + ค่าปรับรายวัน
-- ไม่ติดตั้ง CEMS: สั่งแก้ไข + บทลงโทษเพิ่มเติม
-
-**หน่วยงานรับผิดชอบ:** Safety (primary), ET/Eng (high)"""
+                reply = "สวัสดีครับ ผมคือ **Thoth-Legal Agent** สำหรับ SYS Steel\n\n⚙️ ขณะนี้อยู่ใน **Demo mode** — กรุณาตั้งค่า `LLM_PROVIDER` ใน `.env`\n\nรองรับ provider:\n- `anthropic` — Claude API\n- `openai` — GPT-4o\n- `bedrock` — AWS Bedrock (Claude/Llama)\n- `grok` — xAI Grok\n- `ollama` — Local model\n- `openrouter` — OpenRouter (หลาย model)"
         else:
-            reply = f"""สวัสดีครับ ผมคือ AI Legal Assistant สำหรับระบบ Thai Law Compliance ของ SYS Steel
-
-ผมสามารถช่วยคุณได้เกี่ยวกับ:
-- 📋 **รายละเอียดกฏหมาย** - ถามเกี่ยวกับกฏหมายใดก็ได้ในระบบ
-- 🔍 **ค้นหาการเปลี่ยนแปลง** - พิมพ์ "อัปเดตกฏหมาย" หรือ "ค้นหากฏหมายใหม่"
-- 🏭 **ผลกระทบต่อหน่วยงาน** - ถามว่ากฏหมายใดเกี่ยวข้องกับแผนกไหน
-- ⚠️ **บทลงโทษ** - ถามเกี่ยวกับโทษและค่าปรับ
-
-ตัวอย่างคำถาม:
-- "พ.ร.บ. โรงงานกำหนดอะไรบ้าง?"
-- "Safety ต้องทำอะไรตามกฏหมาย?"
-- "อัปเดตกฏหมายแรงงานล่าสุด"
-
-⚙️ *ตั้งค่า ANTHROPIC_API_KEY หรือ OPENAI_API_KEY เพื่อใช้ AI จริง*"""
+            raise
+    except Exception as e:
+        reply = f"⚠️ LLM Error ({get_provider()}): {str(e)}"
 
     # Parse law_updates from reply
     import re
@@ -484,6 +422,46 @@ async def chat(body: ChatRequest):
             pass
 
     conn.close()
+
+    # Save session + messages to DB
+    conn2 = get_conn()
+    title = body.message[:40] + ("…" if len(body.message) > 40 else "")
+    conn2.execute(
+        "INSERT INTO chat_sessions (session_id, username, title, updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP) "
+        "ON CONFLICT(session_id) DO UPDATE SET updated_at=CURRENT_TIMESTAMP",
+        (session_id, username, title)
+    )
+    conn2.execute(
+        "INSERT INTO chat_messages (session_id, role, content, law_updates) VALUES (?,?,?,?)",
+        (session_id, "user", body.message, "[]")
+    )
+    conn2.execute(
+        "INSERT INTO chat_messages (session_id, role, content, law_updates) VALUES (?,?,?,?)",
+        (session_id, "assistant", reply, json.dumps(law_updates, ensure_ascii=False))
+    )
+    conn2.commit(); conn2.close()
+    return {"reply": reply, "session_id": session_id, "law_updates": law_updates}
+
+    # Save session + messages to DB
+    conn2 = get_conn()
+    # Upsert session
+    title = body.message[:40] + ("…" if len(body.message) > 40 else "")
+    conn2.execute(
+        "INSERT INTO chat_sessions (session_id, username, title, updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP) "
+        "ON CONFLICT(session_id) DO UPDATE SET updated_at=CURRENT_TIMESTAMP",
+        (session_id, username, title)
+    )
+    # Save user message
+    conn2.execute(
+        "INSERT INTO chat_messages (session_id, role, content, law_updates) VALUES (?,?,?,?)",
+        (session_id, "user", body.message, "[]")
+    )
+    # Save assistant reply
+    conn2.execute(
+        "INSERT INTO chat_messages (session_id, role, content, law_updates) VALUES (?,?,?,?)",
+        (session_id, "assistant", reply, json.dumps(law_updates, ensure_ascii=False))
+    )
+    conn2.commit(); conn2.close()
     return {"reply": reply, "session_id": session_id, "law_updates": law_updates}
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
@@ -564,6 +542,35 @@ def change_password(body: ChangePasswordRequest):
     if not user or user["password_hash"] != hash_pw(body.old_password):
         conn.close(); raise HTTPException(400, "รหัสผ่านเดิมไม่ถูกต้อง")
     conn.execute("UPDATE users SET password_hash=? WHERE username=?", (hash_pw(body.new_password), body.username))
+    conn.commit(); conn.close(); return {"success": True}
+
+# ── CHAT HISTORY ─────────────────────────────────────────────────────────────
+@app.get("/api/chat/sessions")
+def get_chat_sessions(username: str = "anonymous"):
+    conn = get_conn()
+    sessions = rows(conn.execute(
+        "SELECT session_id, title, created_at, updated_at FROM chat_sessions WHERE username=? ORDER BY updated_at DESC LIMIT 50",
+        (username,)
+    ))
+    conn.close(); return sessions
+
+@app.get("/api/chat/sessions/{session_id}")
+def get_chat_session(session_id: str):
+    conn = get_conn()
+    msgs = rows(conn.execute(
+        "SELECT role, content, law_updates, created_at FROM chat_messages WHERE session_id=? ORDER BY created_at ASC",
+        (session_id,)
+    ))
+    for m in msgs:
+        try: m["law_updates"] = json.loads(m["law_updates"] or "[]")
+        except: m["law_updates"] = []
+    conn.close(); return msgs
+
+@app.delete("/api/chat/sessions/{session_id}")
+def delete_chat_session(session_id: str):
+    conn = get_conn()
+    conn.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM chat_sessions WHERE session_id=?", (session_id,))
     conn.commit(); conn.close(); return {"success": True}
 
 # ── STATIC FRONTEND ───────────────────────────────────────────────────────────

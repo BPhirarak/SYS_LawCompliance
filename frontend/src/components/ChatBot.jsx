@@ -15,7 +15,7 @@ const ThothIcon = ({ size = 20 }) => (
 
 const PROVIDERS = {
   anthropic:  { label: 'Anthropic Claude', color: 'text-orange-400', models: ['claude-opus-4-5','claude-sonnet-4-5','claude-haiku-3-5'] },
-  openai:     { label: 'OpenAI', color: 'text-green-400', models: ['gpt-4o','gpt-4o-mini','gpt-4-turbo'] },
+  openai:     { label: 'OpenAI', color: 'text-green-400', models: ['gpt-5.2','o3','o3-mini','o1','o1-mini','gpt-4o','gpt-4o-mini','gpt-4-turbo'] },
   bedrock:    { label: 'AWS Bedrock', color: 'text-yellow-400', models: ['anthropic.claude-3-5-sonnet-20241022-v2:0','anthropic.claude-3-haiku-20240307-v1:0','meta.llama3-70b-instruct-v1:0'] },
   grok:       { label: 'Grok (xAI)', color: 'text-purple-400', models: ['grok-3','grok-3-mini','grok-2'] },
   ollama:     { label: 'Ollama (Local)', color: 'text-cyan-400', models: ['llama3.2','llama3.1','mistral','qwen2.5'] },

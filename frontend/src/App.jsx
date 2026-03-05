@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
-import { LayoutDashboard, Scale, Grid3X3, KanbanSquare, Users, LogOut, UserCircle, X } from 'lucide-react'
+import { LayoutDashboard, Scale, Grid3X3, KanbanSquare, Users, LogOut, UserCircle, X, HelpCircle } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import LawList from './pages/LawList'
 import LawMatrix from './pages/LawMatrix'
 import Kanban from './pages/Kanban'
 import Login from './pages/Login'
 import UserManagement from './pages/UserManagement'
+import Help from './pages/Help'
 import ChatBot from './components/ChatBot'
 import api from './api'
 
@@ -15,6 +16,7 @@ const nav = [
   { to: '/laws', icon: Scale, label: 'กฏหมาย' },
   { to: '/matrix', icon: Grid3X3, label: 'Matrix' },
   { to: '/kanban', icon: KanbanSquare, label: 'Compliance Kanban' },
+  { to: '/help', icon: HelpCircle, label: 'Help' },
 ]
 
 function ChangePasswordModal({ auth, onClose }) {
@@ -142,6 +144,7 @@ export default function App() {
           <Route path="/laws" element={<LawList />} />
           <Route path="/matrix" element={<LawMatrix />} />
           <Route path="/kanban" element={<Kanban />} />
+          <Route path="/help" element={<Help />} />
           {auth.role === 'admin' && <Route path="/users" element={<UserManagement auth={auth} />} />}
         </Routes>
       </main>

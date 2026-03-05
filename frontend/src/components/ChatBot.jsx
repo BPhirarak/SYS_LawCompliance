@@ -16,7 +16,7 @@ const ThothIcon = ({ size = 20 }) => (
 const PROVIDERS = {
   anthropic:  { label: 'Anthropic Claude', color: 'text-orange-400', models: ['claude-opus-4-5','claude-sonnet-4-5','claude-haiku-3-5'] },
   openai:     { label: 'OpenAI', color: 'text-green-400', models: ['gpt-5.2','o3','o3-mini','o1','o1-mini','gpt-4o','gpt-4o-mini','gpt-4-turbo'] },
-  bedrock:    { label: 'AWS Bedrock', color: 'text-yellow-400', models: ['anthropic.claude-3-5-sonnet-20241022-v2:0','anthropic.claude-3-haiku-20240307-v1:0','meta.llama3-70b-instruct-v1:0'] },
+  bedrock:    { label: 'AWS Bedrock', color: 'text-yellow-400', models: ['apac.anthropic.claude-sonnet-4-5-v1:0','anthropic.claude-3-5-sonnet-20241022-v2:0','anthropic.claude-3-haiku-20240307-v1:0','meta.llama3-70b-instruct-v1:0'] },
   grok:       { label: 'Grok (xAI)', color: 'text-purple-400', models: ['grok-3','grok-3-mini','grok-2'] },
   ollama:     { label: 'Ollama (Local)', color: 'text-cyan-400', models: ['llama3.2','llama3.1','mistral','qwen2.5'] },
   openrouter: { label: 'OpenRouter', color: 'text-pink-400', models: ['anthropic/claude-3.5-sonnet','openai/gpt-4o','google/gemini-pro','meta-llama/llama-3.1-70b-instruct'] },
@@ -227,6 +227,7 @@ export default function ChatBot({ auth }) {
   const [totalUpdates, setTotalUpdates] = useState(0)
   const [provider, setProvider] = useState(null)
   const bottomRef = useRef(null)
+  const abortControllerRef = useRef(null)
 
   useEffect(() => {
     fetch(`${API}/api/chat/provider`).then(r => r.json()).then(setProvider).catch(() => {})
@@ -252,6 +253,15 @@ export default function ChatBot({ auth }) {
     setPanel(null)
   }
 
+  function stopGeneration() {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      abortControllerRef.current = null
+    }
+    setLoading(false)
+    setMessages(prev => [...prev, { role:'assistant', content:'⚠️ การประมวลผลถูกยกเลิก', updates:[] }])
+  }
+
   async function send() {
     const msg = input.trim()
     if (!msg || loading) return
@@ -259,10 +269,14 @@ export default function ChatBot({ auth }) {
     const history = messages.filter(m => m.role !== 'system').slice(-10).map(m => ({ role:m.role, content:m.content }))
     setMessages(prev => [...prev, { role:'user', content:msg, updates:[] }])
     setLoading(true)
+    
+    abortControllerRef.current = new AbortController()
+    
     try {
       const res = await fetch(`${API}/api/chat`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ message:msg, session_id:sessionId, username, history })
+        body: JSON.stringify({ message:msg, session_id:sessionId, username, history }),
+        signal: abortControllerRef.current.signal
       })
       const data = await res.json()
       setSessionId(data.session_id)
@@ -270,10 +284,13 @@ export default function ChatBot({ auth }) {
       const updates = data.law_updates || []
       setMessages(prev => [...prev, { role:'assistant', content:cleanReply, updates }])
       if (updates.length > 0) setTotalUpdates(n => n + updates.length)
-    } catch {
+    } catch (err) {
+      if (err.name === 'AbortError') return // User cancelled
       setMessages(prev => [...prev, { role:'assistant', content:'⚠️ ไม่สามารถเชื่อมต่อกับ server ได้', updates:[] }])
+    } finally {
+      abortControllerRef.current = null
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   function handleKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send() } }
@@ -361,11 +378,20 @@ export default function ChatBot({ auth }) {
           <div className="border-t border-gray-200 p-3 flex gap-2 shrink-0">
             <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKey}
               placeholder="ถามเกี่ยวกับกฏหมาย หรือพิมพ์ 'อัปเดตกฏหมาย'..."
-              rows={1} className="flex-1 resize-none border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-            <button onClick={send} disabled={!input.trim()||loading}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-xl px-3 py-2 transition-colors">
-              <Send size={16}/>
-            </button>
+              disabled={loading}
+              rows={1} className="flex-1 resize-none border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"/>
+            {loading ? (
+              <button onClick={stopGeneration}
+                className="bg-red-600 hover:bg-red-700 text-white rounded-xl px-3 py-2 transition-colors flex items-center gap-1.5">
+                <X size={16}/>
+                <span className="text-sm font-medium">หยุด</span>
+              </button>
+            ) : (
+              <button onClick={send} disabled={!input.trim()}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-xl px-3 py-2 transition-colors">
+                <Send size={16}/>
+              </button>
+            )}
           </div>
         </div>
       )}

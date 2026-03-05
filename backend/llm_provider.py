@@ -56,8 +56,8 @@ def call_llm(system: str, messages: list) -> str:
     # ── AWS Bedrock ───────────────────────────────────────────────────────────
     elif provider == "bedrock":
         import boto3, json as _json
-        region   = os.environ.get("AWS_BEDROCK_REGION", "ap-southeast-1")
-        model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+        region   = os.environ.get("AWS_BEDROCK_REGION", "us-east-1")
+        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
         # Support both IAM role (on EC2/ECS) and explicit key
         session_kwargs = {}
         if os.environ.get("AWS_ACCESS_KEY_ID"):
@@ -197,8 +197,8 @@ def call_llm_with_tools(system: str, messages: list, tools: list, tools_openai: 
     # ── Bedrock ───────────────────────────────────────────────────────────────
     elif provider == "bedrock":
         import boto3, json as _j
-        region   = os.environ.get("AWS_BEDROCK_REGION", "ap-southeast-1")
-        model_id = os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+        region   = os.environ.get("AWS_BEDROCK_REGION", "us-east-1")
+        model_id = os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6")
         session_kwargs = {}
         if os.environ.get("AWS_ACCESS_KEY_ID"):
             session_kwargs = {

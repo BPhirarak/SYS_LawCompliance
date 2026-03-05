@@ -286,7 +286,7 @@ def get_chat_provider():
     model_map = {
         "anthropic":  os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5"),
         "openai":     os.environ.get("OPENAI_MODEL", "gpt-4o"),
-        "bedrock":    os.environ.get("BEDROCK_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0"),
+        "bedrock":    os.environ.get("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"),
         "grok":       os.environ.get("GROK_MODEL", "grok-3-mini"),
         "ollama":     os.environ.get("OLLAMA_MODEL", "llama3.2"),
         "openrouter": os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),

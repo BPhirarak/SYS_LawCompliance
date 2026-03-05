@@ -482,14 +482,112 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/api/auth/login")
-def login(body: LoginRequest):
-    conn = get_conn()
-    user = row(conn.execute("SELECT * FROM users WHERE username=?", (body.username,)))
-    conn.close()
-    if not user or user["password_hash"] != hash_pw(body.password):
-        raise HTTPException(401, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
-    token = f"{user['id']}:{secrets.token_hex(16)}"
-    return {"token": token, "username": user["username"], "role": user["role"]}
+async def login(body: LoginRequest):
+    """
+    Login ผ่าน AD (Active Directory) API หรือ local DB
+    - ถ้ามี AD_LOGIN_URL ใน .env จะใช้ AD login
+    - ถ้าไม่มี จะใช้ local DB authentication
+    """
+    import httpx
+    
+    ad_url = os.environ.get("AD_LOGIN_URL")
+    
+    # Admin users list (from .env or hardcoded fallback)
+    admin_users_str = os.environ.get("ADMIN_USERS", "banpotp@syssteel.com,piyawats@syssteel.com,thirayur@syssteel.com")
+    ADMIN_USERS = [u.strip().lower() for u in admin_users_str.split(",")]
+    
+    # ── AD Login Mode ─────────────────────────────────────────────────────────
+    if ad_url:
+        try:
+            print(f"[AD LOGIN] Attempting login for: {body.username}")
+            print(f"[AD LOGIN] AD URL: {ad_url}")
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                ad_response = await client.post(ad_url, json={
+                    "email": body.username,
+                    "password": body.password
+                })
+                
+                print(f"[AD LOGIN] Response status: {ad_response.status_code}")
+                print(f"[AD LOGIN] Response body: {ad_response.text}")
+                
+                if ad_response.status_code != 200:
+                    # Try to get error message from AD response
+                    try:
+                        error_data = ad_response.json()
+                        error_msg = error_data.get("message") or error_data.get("detail") or error_data.get("error")
+                        if error_msg:
+                            raise HTTPException(401, f"AD login error: {error_msg}")
+                    except:
+                        pass
+                    raise HTTPException(401, f"ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง (AD) - Status: {ad_response.status_code}")
+                
+                ad_data = ad_response.json()
+                ad_token = ad_data.get("access_token")
+                # AD returns email field as the username identifier
+                ad_username = ad_data.get("email", body.username)
+                ad_display_name = ad_data.get("display_name", "")
+                ad_groups = ad_data.get("groups", [])
+                
+                print(f"[AD LOGIN] Success! Email: {ad_username}, Display: {ad_display_name}, Groups: {ad_groups}")
+                
+        except HTTPException:
+            raise
+        except httpx.TimeoutException:
+            print("[AD LOGIN] Timeout error")
+            raise HTTPException(503, "AD server ไม่ตอบสนอง (timeout)")
+        except httpx.RequestError as e:
+            print(f"[AD LOGIN] Request error: {str(e)}")
+            raise HTTPException(503, f"ไม่สามารถเชื่อมต่อ AD server: {str(e)}")
+        except Exception as e:
+            print(f"[AD LOGIN] Unexpected error: {str(e)}")
+            raise HTTPException(500, f"AD login error: {str(e)}")
+        
+        # Determine role based on username/email
+        role = "admin" if ad_username.lower() in ADMIN_USERS else "user"
+        print(f"[AD LOGIN] Assigned role: {role}")
+        
+        # Sync user to local DB (create or update)
+        conn = get_conn()
+        user = row(conn.execute("SELECT * FROM users WHERE username=?", (ad_username,)))
+        
+        if not user:
+            # Create new user from AD
+            conn.execute("INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
+                (ad_username, hash_pw("ad_user"), role))
+            conn.commit()
+            user = row(conn.execute("SELECT * FROM users WHERE username=?", (ad_username,)))
+            print(f"[AD LOGIN] Created new user in DB")
+        else:
+            # Update role if changed (in case user was promoted/demoted)
+            if user["role"] != role:
+                conn.execute("UPDATE users SET role=? WHERE username=?", (role, ad_username))
+                conn.commit()
+                user = row(conn.execute("SELECT * FROM users WHERE username=?", (ad_username,)))
+                print(f"[AD LOGIN] Updated user role in DB")
+        
+        conn.close()
+        
+        # Return token + user info
+        token = f"{user['id']}:{secrets.token_hex(16)}"
+        return {
+            "token": token,
+            "username": user["username"],
+            "role": user["role"],
+            "ad_token": ad_token  # Optional: pass AD token to frontend if needed
+        }
+    
+    # ── Local DB Login Mode (Fallback) ───────────────────────────────────────
+    else:
+        print(f"[LOCAL LOGIN] Attempting login for: {body.username}")
+        conn = get_conn()
+        user = row(conn.execute("SELECT * FROM users WHERE username=?", (body.username,)))
+        conn.close()
+        if not user or user["password_hash"] != hash_pw(body.password):
+            raise HTTPException(401, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
+        token = f"{user['id']}:{secrets.token_hex(16)}"
+        print(f"[LOCAL LOGIN] Success! Role: {user['role']}")
+        return {"token": token, "username": user["username"], "role": user["role"]}
 
 @app.get("/api/auth/users")
 def get_users(x_role: str = Header(None)):

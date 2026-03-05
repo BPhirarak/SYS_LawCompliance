@@ -125,19 +125,30 @@ backend/
 
 ## Data Flow
 
-### 1. User Authentication Flow
+### 1. User Authentication Flow (AD Login)
 ```
 User → Login Page → POST /api/auth/login
                     ↓
-                    Verify credentials (SHA-256 hash)
+                    POST to AD API (http://10.41.97.111:64659/auth/login)
                     ↓
-                    Generate token (user_id:random_hex)
+                    AD validates credentials
                     ↓
-                    Return {token, username, role}
+                    Return AD token + username
+                    ↓
+                    Sync user to local DB (create if not exists)
+                    ↓
+                    Generate local token (user_id:random_hex)
+                    ↓
+                    Return {token, username, role, ad_token}
                     ↓
                     Store in localStorage
                     ↓
                     Redirect to Dashboard
+
+Fallback (if AD_LOGIN_URL not set):
+    → Verify credentials from local DB (SHA-256 hash)
+    → Generate token
+    → Return {token, username, role}
 ```
 
 ### 2. AI Chat Flow (with Tool Calling)
@@ -194,10 +205,12 @@ User → Drag task to new column
 ## Security Architecture
 
 ### Authentication
-- **Method**: Token-based (stored in localStorage)
-- **Password**: SHA-256 hash (not bcrypt for simplicity)
+- **Method**: AD (Active Directory) login + local token
+- **AD API**: `http://10.41.97.111:64659/auth/login`
+- **Fallback**: Local DB authentication (if AD_LOGIN_URL not set)
 - **Token format**: `{user_id}:{random_hex}`
 - **Session**: Client-side only (no server-side session)
+- **User sync**: AD users auto-created in local DB on first login (role: user)
 
 ### Authorization
 - **Role-based**: `admin` vs `user`
